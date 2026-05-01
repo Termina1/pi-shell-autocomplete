@@ -126,7 +126,6 @@ export class ZshCompleter {
       const result = await captureCompletions(token, this.config);
       return result.items;
     } catch {
-      // node-pty may not be available (native module build failed)
       return [];
     }
   }
