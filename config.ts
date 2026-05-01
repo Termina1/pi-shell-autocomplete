@@ -29,8 +29,11 @@ export interface AiConfig {
   /** Whether AI ghost text is enabled */
   enabled: boolean;
 
-  /** Path to the GGUF model file (relative to extension directory) */
+  /** Path to the GGUF model file (relative to extension directory). Deprecated: use modelPriority. */
   modelPath: string;
+
+  /** Priority-ordered list of GGUF model paths. First existing file is used. Falls back to modelPath if empty. */
+  modelPriority: string[];
 
   /** Debounce delay before triggering AI inference in ms */
   debounceMs: number;
@@ -40,6 +43,31 @@ export interface AiConfig {
 
   /** Context size for the llama model */
   contextSize: number;
+
+  /** File system context settings */
+  fileContext: FileContextConfig;
+
+  /** Command history context settings */
+  historyContext: HistoryContextConfig;
+}
+
+export interface FileContextConfig {
+  /** Whether to include directory file listing in AI prompt */
+  enabled: boolean;
+
+  /** Maximum number of file/directory entries to include */
+  maxFiles: number;
+}
+
+export interface HistoryContextConfig {
+  /** Whether to include recent shell commands in AI prompt */
+  enabled: boolean;
+
+  /** Maximum number of history entries to include */
+  maxEntries: number;
+
+  /** Path to the zsh history file */
+  historyPath: string;
 }
 
 export interface GhostConfig {
@@ -56,11 +84,18 @@ export interface GhostConfig {
  */
 export function createConfig(
   overrides?: Partial<ShellAutocompleteConfig> & {
-    ai?: Partial<AiConfig>;
+    ai?: Partial<AiConfig> & {
+      fileContext?: Partial<FileContextConfig>;
+      historyContext?: Partial<HistoryContextConfig>;
+    };
     ghost?: Partial<GhostConfig>;
   },
 ): ShellAutocompleteConfig {
-  if (!overrides) return { ...defaultConfig, ai: { ...defaultConfig.ai }, ghost: { ...defaultConfig.ghost } };
+  if (!overrides) return {
+    ...defaultConfig,
+    ai: { ...defaultConfig.ai, fileContext: { ...defaultConfig.ai.fileContext }, historyContext: { ...defaultConfig.ai.historyContext } },
+    ghost: { ...defaultConfig.ghost },
+  };
 
   return {
     triggerChar: overrides.triggerChar ?? defaultConfig.triggerChar,
@@ -71,9 +106,19 @@ export function createConfig(
     ai: {
       enabled: overrides.ai?.enabled ?? defaultConfig.ai.enabled,
       modelPath: overrides.ai?.modelPath ?? defaultConfig.ai.modelPath,
+      modelPriority: overrides.ai?.modelPriority ?? defaultConfig.ai.modelPriority,
       debounceMs: overrides.ai?.debounceMs ?? defaultConfig.ai.debounceMs,
       maxTokens: overrides.ai?.maxTokens ?? defaultConfig.ai.maxTokens,
       contextSize: overrides.ai?.contextSize ?? defaultConfig.ai.contextSize,
+      fileContext: {
+        enabled: overrides.ai?.fileContext?.enabled ?? defaultConfig.ai.fileContext.enabled,
+        maxFiles: overrides.ai?.fileContext?.maxFiles ?? defaultConfig.ai.fileContext.maxFiles,
+      },
+      historyContext: {
+        enabled: overrides.ai?.historyContext?.enabled ?? defaultConfig.ai.historyContext.enabled,
+        maxEntries: overrides.ai?.historyContext?.maxEntries ?? defaultConfig.ai.historyContext.maxEntries,
+        historyPath: overrides.ai?.historyContext?.historyPath ?? defaultConfig.ai.historyContext.historyPath,
+      },
     },
     ghost: {
       color: overrides.ghost?.color ?? defaultConfig.ghost.color,
@@ -90,9 +135,24 @@ export const defaultConfig: ShellAutocompleteConfig = {
   ai: {
     enabled: true,
     modelPath: "models/starcoder2-3b-Q4_K_M.gguf",
+    modelPriority: [
+      "models/qwen2.5-coder-3b-instruct-Q4_K_M.gguf",
+      "models/qwen2.5-coder-1.5b-instruct-Q4_K_M.gguf",
+      "models/starcoder2-3b-Q4_K_M.gguf",
+      "models/deepseek-coder-1.3b-instruct-Q4_K_M.gguf",
+    ],
     debounceMs: 400,
     maxTokens: 40,
     contextSize: 2048,
+    fileContext: {
+      enabled: true,
+      maxFiles: 20,
+    },
+    historyContext: {
+      enabled: true,
+      maxEntries: 10,
+      historyPath: "~/.zsh_history",
+    },
   },
   ghost: {
     color: "\x1b[38;5;244m",

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createConfig } from "./config";
 import { ZshCompleter } from "./zsh-completer";
 import { AiCompleter } from "./ai-completer";
+import { createContextCollector } from "./context-collector";
 import { ShellAutocompleteEditor } from "./editor";
 import { createShellAutocompleteProvider } from "./provider";
 
@@ -27,8 +28,6 @@ export default function (pi: ExtensionAPI) {
     pi.exec(command, args, opts ?? {}),
   );
 
-  const aiCompleter = new AiCompleter(config.ai);
-
   pi.on("session_start", async (_event, ctx) => {
     const available = await zshCompleter.checkAvailability(() => {
       ctx.ui.notify("shell-autocomplete: zsh not available", "error");
@@ -36,6 +35,10 @@ export default function (pi: ExtensionAPI) {
     if (!available) return;
 
     ctx.ui.notify("shell-autocomplete ready", "success");
+
+    // Create context collector with current working directory
+    const contextCollector = createContextCollector(config.ai, process.cwd());
+    const aiCompleter = new AiCompleter(config.ai, undefined, contextCollector);
 
     let editorRef: ShellAutocompleteEditor | null = null;
 
