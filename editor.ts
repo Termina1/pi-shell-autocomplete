@@ -13,15 +13,19 @@ export class ShellAutocompleteEditor extends CustomEditor {
   private ghostColor: string;
   /** Current shell token — used to discard stale AI results */
   currentToken: string | undefined;
+  /** Check AI cache synchronously */
+  private getCachedAi: (token: string) => string | undefined;
 
   constructor(
     tui: TUI,
     theme: EditorTheme,
     keybindings: KeybindingsManager,
     ghostConfig: GhostConfig,
+    getCachedAi: (token: string) => string | undefined,
   ) {
     super(tui, theme, keybindings);
     this.ghostColor = ghostConfig.color;
+    this.getCachedAi = getCachedAi;
   }
 
   override handleInput(data: string): void {
@@ -59,6 +63,12 @@ export class ShellAutocompleteEditor extends CustomEditor {
 
     if (hasToken) {
       this.currentToken = shellMatch[1]!;
+      // Show cached ghost IMMEDIATELY (before async autocomplete roundtrip)
+      const cached = this.getCachedAi(this.currentToken);
+      if (cached) {
+        this.ghostText = cached;
+        this.requestRender();
+      }
       (this as any).tryTriggerAutocomplete?.();
     } else if (this.ghostText) {
       this.currentToken = undefined;

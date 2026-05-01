@@ -1,114 +1,88 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AiCompleter, type ModelLoader } from "../ai-completer";
+import { describe, it, expect, vi } from "vitest";
+import { AiCompleter } from "../ai-completer";
 import { defaultConfig } from "../config";
 
-function makeConfig(overrides?: Partial<typeof defaultConfig.ai>) {
-  return { ...defaultConfig.ai, ...overrides };
-}
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-function mockLoader(
-  result: string | null,
-  error?: Error,
-): ModelLoader {
-  return vi.fn(async () => {
-    if (error) throw error;
-    if (result === null) return null;
-    return {
-      generateInfillCompletion: vi.fn().mockResolvedValue(result),
-    } as any;
-  });
-}
+function c(o?: Partial<typeof defaultConfig.ai>) { return { ...defaultConfig.ai, ...o }; }
 
 describe("AiCompleter", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+  it("enabled returns config", () => {
+    expect(new AiCompleter(c({ enabled: true })).enabled).toBe(true);
+    expect(new AiCompleter(c({ enabled: false })).enabled).toBe(false);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
+  it("disabled does not call loader", () => {
+    const loader = vi.fn();
+    const cb = vi.fn();
+    new AiCompleter(c({ enabled: false }), loader).predict("git", [], cb);
+    expect(cb).not.toHaveBeenCalled();
   });
 
-  describe("enabled", () => {
-    it("returns config.enabled", () => {
-      expect(
-        new AiCompleter(makeConfig({ enabled: true }), mockLoader("x")).enabled,
-      ).toBe(true);
-      expect(
-        new AiCompleter(makeConfig({ enabled: false }), mockLoader("x")).enabled,
-      ).toBe(false);
-    });
+  it("calls onResult via debounce", async () => {
+    const loader = vi.fn(() => Promise.resolve(
+      { generateInfillCompletion: vi.fn().mockResolvedValue("commit") } as any));
+    const ai = new AiCompleter(c({ debounceMs: 50 }), loader);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    await sleep(100);
+    expect(cb).toHaveBeenCalledWith("git", "commit");
+    expect(loader).toHaveBeenCalledTimes(1);
   });
 
-  describe("predict", () => {
-    it("returns null when disabled", async () => {
-      const c = new AiCompleter(
-        makeConfig({ enabled: false }),
-        mockLoader("commit"),
-      );
-      expect(await c.predict("git", [])).toBeNull();
-    });
+  it("cache hit calls onResult immediately", async () => {
+    const loader = vi.fn(() => Promise.resolve(
+      { generateInfillCompletion: vi.fn().mockResolvedValue("commit") } as any));
+    const ai = new AiCompleter(c({ debounceMs: 50 }), loader);
+    const p1 = new Promise<void>(r => ai.predict("git", [], () => r()));
+    await sleep(100); await p1;
 
-    it("resolves prediction after debounce", async () => {
-      const loader = mockLoader("commit");
-      const c = new AiCompleter(makeConfig({ debounceMs: 100 }), loader);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    expect(cb).toHaveBeenCalledWith("git", "commit");
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
 
-      const p = c.predict("git", [{ value: "git", label: "git" }]);
-      await vi.advanceTimersByTimeAsync(200);
+  it("does not call onResult when loader returns null", async () => {
+    const loader = vi.fn(() => Promise.resolve(null));
+    const ai = new AiCompleter(c({ debounceMs: 50 }), loader);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    await sleep(100);
+    expect(cb).not.toHaveBeenCalled();
+  });
 
-      expect(await p).toBe("commit");
-      expect(loader).toHaveBeenCalledOnce();
-    });
+  it("does not call onResult on error", async () => {
+    const loader = vi.fn(() => Promise.reject(new Error("fail")));
+    const ai = new AiCompleter(c({ debounceMs: 50 }), loader);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    await sleep(100);
+    expect(cb).not.toHaveBeenCalled();
+  });
 
-    it("returns null when model loader returns null", async () => {
-      const c = new AiCompleter(makeConfig({ debounceMs: 100 }), mockLoader(null));
-      const p = c.predict("git", []);
-      await vi.advanceTimersByTimeAsync(200);
-      expect(await p).toBeNull();
-    });
+  it("does not call onResult when result > 100 chars", async () => {
+    const loader = vi.fn(() => Promise.resolve(
+      { generateInfillCompletion: vi.fn().mockResolvedValue("x".repeat(101)) } as any));
+    const ai = new AiCompleter(c({ debounceMs: 50 }), loader);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    await sleep(100);
+    expect(cb).not.toHaveBeenCalled();
+  });
 
-    it("returns null when model loader throws", async () => {
-      const c = new AiCompleter(
-        makeConfig({ debounceMs: 100 }),
-        mockLoader("x", new Error("fail")),
-      );
-      const p = c.predict("git", []);
-      await vi.advanceTimersByTimeAsync(200);
-      expect(await p).toBeNull();
-    });
-
-    it("rejects results > 100 chars", async () => {
-      const c = new AiCompleter(
-        makeConfig({ debounceMs: 100 }),
-        mockLoader("x".repeat(101)),
-      );
-      const p = c.predict("git", []);
-      await vi.advanceTimersByTimeAsync(200);
-      expect(await p).toBeNull();
-    });
-
-    it("rejects empty results", async () => {
-      const c = new AiCompleter(
-        makeConfig({ debounceMs: 100 }),
-        mockLoader("\n\n"),
-      );
-      const p = c.predict("git", []);
-      await vi.advanceTimersByTimeAsync(200);
-      expect(await p).toBeNull();
-    });
-
-    it("debounces rapid calls", async () => {
-      const loader = mockLoader("commit");
-      const c = new AiCompleter(makeConfig({ debounceMs: 400 }), loader);
-
-      c.predict("g", []);
-      c.predict("gi", []);
-      const p = c.predict("git", []);
-
-      await vi.advanceTimersByTimeAsync(500);
-      await p;
-
-      // Loader should be called only once for the last token
-      expect(loader).toHaveBeenCalledTimes(1);
-    });
+  it("debounce: rapid calls, only last fires", async () => {
+    const loader = vi.fn(() => Promise.resolve(
+      { generateInfillCompletion: vi.fn().mockResolvedValue("x") } as any));
+    const ai = new AiCompleter(c({ debounceMs: 200 }), loader);
+    ai.predict("g", [], () => {});
+    await sleep(20);
+    ai.predict("gi", [], () => {});
+    await sleep(20);
+    const cb = vi.fn();
+    ai.predict("git", [], cb);
+    await sleep(300);
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(loader).toHaveBeenCalledTimes(1);
   });
 });

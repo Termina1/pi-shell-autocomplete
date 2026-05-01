@@ -46,7 +46,7 @@ const ghostConfig = defaultConfig.ghost;
 
 function makeEditor() {
   const tui = { requestRender: vi.fn() };
-  return new ShellAutocompleteEditor(tui as any, {} as any, {} as any, ghostConfig);
+  return new ShellAutocompleteEditor(tui as any, {} as any, {} as any, ghostConfig, () => undefined);
 }
 
 describe("ShellAutocompleteEditor", () => {
@@ -191,6 +191,37 @@ describe("ShellAutocompleteEditor", () => {
     it("calls tui.requestRender", () => {
       editor.requestRender();
       expect((editor as any).tui.requestRender).toHaveBeenCalled();
+    });
+  });
+
+  describe("synchronous cache hit", () => {
+    it("shows cached ghost immediately on input", () => {
+      const tui = { requestRender: vi.fn() };
+      const ed = new ShellAutocompleteEditor(
+        tui as any, {} as any, {} as any, ghostConfig,
+        () => "ommit",
+      );
+      vi.spyOn(ed as any, "getLines").mockReturnValue(["!git c"]);
+      vi.spyOn(ed as any, "getCursor").mockReturnValue({ line: 0, col: 6 });
+
+      ed.handleInput("x");
+
+      expect(ed.getGhostText()).toBe("ommit");
+      expect(tui.requestRender).toHaveBeenCalled();
+    });
+
+    it("does not show ghost on cache miss", () => {
+      const tui = { requestRender: vi.fn() };
+      const ed = new ShellAutocompleteEditor(
+        tui as any, {} as any, {} as any, ghostConfig,
+        () => undefined,
+      );
+      vi.spyOn(ed as any, "getLines").mockReturnValue(["!git c"]);
+      vi.spyOn(ed as any, "getCursor").mockReturnValue({ line: 0, col: 6 });
+
+      ed.handleInput("x");
+
+      expect(ed.getGhostText()).toBe("");
     });
   });
 });

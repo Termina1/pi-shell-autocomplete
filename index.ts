@@ -40,7 +40,11 @@ export default function (pi: ExtensionAPI) {
     let editorRef: ShellAutocompleteEditor | null = null;
 
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const editor = new ShellAutocompleteEditor(tui, theme, keybindings, config.ghost);
+      const editor = new ShellAutocompleteEditor(
+        tui, theme, keybindings,
+        config.ghost,
+        (token) => aiCompleter.getCached(token),
+      );
       editorRef = editor;
       return editor;
     });

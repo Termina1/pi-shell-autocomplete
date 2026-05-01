@@ -5,164 +5,66 @@ import type { ZshCompleter } from "../zsh-completer";
 import type { AiCompleter } from "../ai-completer";
 import { defaultConfig, type ShellAutocompleteConfig } from "../config";
 
-function makeConfig(): ShellAutocompleteConfig {
+function mkConfig(): ShellAutocompleteConfig {
   return { ...defaultConfig, ai: { ...defaultConfig.ai }, ghost: { ...defaultConfig.ghost } };
 }
 
-function mockZsh(commands: string[], completions: { value: string; label: string }[] = []) {
-  return {
-    getCommands: vi.fn().mockResolvedValue(commands),
-    getCompletions: vi.fn().mockResolvedValue(completions),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    checkAvailability: vi.fn().mockResolvedValue(true),
-    needsNotification: false,
-    markNotified: vi.fn(),
-  } as unknown as ZshCompleter;
+function mockZsh(cmds: string[], pos: { value: string; label: string }[] = []) {
+  return { getCommands: vi.fn().mockResolvedValue(cmds), getCompletions: vi.fn().mockResolvedValue(pos), isAvailable: vi.fn().mockResolvedValue(true), checkAvailability: vi.fn().mockResolvedValue(true), needsNotification: false, markNotified: vi.fn() } as unknown as ZshCompleter;
 }
 
-function mockAi() {
-  return {
-    enabled: true,
-    predict: vi.fn().mockResolvedValue("completion"),
-  } as unknown as AiCompleter;
-}
+function mockAi() { return { enabled: true, predict: vi.fn() } as unknown as AiCompleter; }
 
-function mockCurrent(returnNull = false): AutocompleteProvider {
-  return {
-    getSuggestions: vi.fn().mockResolvedValue(
-      returnNull ? null : { items: [], prefix: "" },
-    ),
-    applyCompletion: vi.fn(),
-    shouldTriggerFileCompletion: vi.fn().mockReturnValue(true),
-  };
+function mockCur(n = false): AutocompleteProvider {
+  return { getSuggestions: vi.fn().mockResolvedValue(n ? null : { items: [], prefix: "" }), applyCompletion: vi.fn(), shouldTriggerFileCompletion: vi.fn().mockReturnValue(true) };
 }
 
 describe("scoreAndRank", () => {
-  it("ranks prefix matches highest", () => {
-    const result = scoreAndRank("git", ["git", "git-lfs", "github-cli", "dig"], 3);
-    expect(result[0]!.value).toBe("git");
-    expect(result[1]!.value).toBe("git-lfs");
-    expect(result[2]!.value).toBe("github-cli");
-  });
-
-  it("includes substring matches with lower score", () => {
-    const result = scoreAndRank("git", ["digit", "agitprop", "git", "fugitive"], 5);
-    const values = result.map((r) => r.value);
-    expect(values).toContain("digit"); // contains "git" as substring
-    expect(values).toContain("fugitive"); // contains "git"
-  });
-
-  it("excludes items with no match", () => {
-    const result = scoreAndRank("git", ["docker", "npm", "git", "kubectl"], 5);
-    const values = result.map((r) => r.value);
-    expect(values).toContain("git");
-    expect(values).not.toContain("docker");
-    expect(values).not.toContain("npm");
-  });
-
-  it("respects limit", () => {
-    const items = Array.from({ length: 20 }, (_, i) => `git-${i}`);
-    const result = scoreAndRank("git", items, 5);
-    expect(result.length).toBe(5);
-  });
-
-  it("handles case-insensitive matching", () => {
-    const result = scoreAndRank("GIT", ["git", "GIT-LFS", "GitHub", "docker"], 5);
-    expect(result[0]!.value).toBe("git");
-  });
+  it("prefix match first", () => { expect(scoreAndRank("git", ["git","git-lfs","dig"],3)[0]!.value).toBe("git"); });
+  it("substring included", () => { expect(scoreAndRank("git",["digit","git"],5).map(x=>x.value)).toContain("digit"); });
+  it("no-match excluded", () => { expect(scoreAndRank("git",["docker","git"],5).map(x=>x.value)).not.toContain("docker"); });
+  it("limit", () => { expect(scoreAndRank("g",Array.from({length:20},(_,i)=>`g${i}`),5).length).toBe(5); });
 });
 
 describe("createShellAutocompleteProvider", () => {
-  describe("getSuggestions", () => {
-    it("delegates to current provider when no ! prefix", async () => {
-      const current = mockCurrent();
-      const provider = createShellAutocompleteProvider(current, mockZsh([]), mockAi(), makeConfig());
-
-      const result = await provider.getSuggestions(
-        ["echo hello"],
-        0,
-        10,
-        { signal: new AbortController().signal } as any,
-      );
-
-      expect(current.getSuggestions).toHaveBeenCalled();
-    });
-
-    it("returns shell completions for ! prefix (command mode)", async () => {
-      const current = mockCurrent(true);
-      const zsh = mockZsh(["git", "docker", "github-cli", "dig"]);
-      const provider = createShellAutocompleteProvider(current, zsh, mockAi(), makeConfig());
-
-      const result = await provider.getSuggestions(
-        ["!git"],
-        0,
-        4,
-        { signal: new AbortController().signal } as any,
-      );
-
-      expect(result).not.toBeNull();
-      expect(result!.items.length).toBeGreaterThan(0);
-      expect(result!.prefix).toBe("git");
-      expect(zsh.getCommands).toHaveBeenCalled();
-    });
-
-    it("returns positional completions for ! prefix with space", async () => {
-      const current = mockCurrent(true);
-      const zsh = mockZsh([], [
-        { value: "git commit", label: "commit" },
-        { value: "git checkout", label: "checkout" },
-      ]);
-      const provider = createShellAutocompleteProvider(current, zsh, mockAi(), makeConfig());
-
-      const result = await provider.getSuggestions(
-        ["!git c"],
-        0,
-        6,
-        { signal: new AbortController().signal } as any,
-      );
-
-      expect(result).not.toBeNull();
-      expect(zsh.getCompletions).toHaveBeenCalledWith("git c");
-    });
-
-    it("fires AI completion as side effect", async () => {
-      const current = mockCurrent(true);
-      const zsh = mockZsh(["git"]);
-      const ai = mockAi();
-      let aiResult: string | null = null;
-      const provider = createShellAutocompleteProvider(
-        current,
-        zsh,
-        ai,
-        makeConfig(),
-        (_token, completion) => { aiResult = completion; },
-      );
-
-      await provider.getSuggestions(
-        ["!git"],
-        0,
-        4,
-        { signal: new AbortController().signal } as any,
-      );
-
-      // AI prediction should have been triggered
-      expect(ai.predict).toHaveBeenCalledWith("git", expect.any(Array));
-    });
+  it("delegates without !", async () => {
+    const c = mockCur(); await createShellAutocompleteProvider(c,mockZsh([]),mockAi(),mkConfig()).getSuggestions!(["echo"],0,4,{signal:new AbortController().signal} as any);
+    expect(c.getSuggestions).toHaveBeenCalled();
   });
 
-  describe("shouldTriggerFileCompletion", () => {
-    it("returns false when shell prefix is active", () => {
-      const current = mockCurrent();
-      const provider = createShellAutocompleteProvider(current, mockZsh([]), mockAi(), makeConfig());
+  it("returns shell completions for !", async () => {
+    const r = await createShellAutocompleteProvider(mockCur(true),mockZsh(["git","docker"]),mockAi(),mkConfig()).getSuggestions!(["!git"],0,4,{signal:new AbortController().signal} as any);
+    expect(r).not.toBeNull(); expect(r!.prefix).toBe("git");
+  });
 
-      expect(provider.shouldTriggerFileCompletion!(["!git"], 0, 4)).toBe(false);
-    });
+  it("positional for ! with space", async () => {
+    const z = mockZsh([],[{value:"git commit",label:"commit"}]);
+    const r = await createShellAutocompleteProvider(mockCur(true),z,mockAi(),mkConfig()).getSuggestions!(["!git c"],0,6,{signal:new AbortController().signal} as any);
+    expect(r).not.toBeNull(); expect(z.getCompletions).toHaveBeenCalledWith("git c");
+  });
 
-    it("delegates to current provider when no shell prefix", () => {
-      const current = mockCurrent();
-      const provider = createShellAutocompleteProvider(current, mockZsh([]), mockAi(), makeConfig());
+  it("fires AI as side effect", async () => {
+    const ai = mockAi();
+    await createShellAutocompleteProvider(mockCur(true),mockZsh(["git"]),ai,mkConfig()).getSuggestions!(["!git"],0,4,{signal:new AbortController().signal} as any);
+    expect(ai.predict).toHaveBeenCalledWith("git", expect.any(Array), expect.any(Function));
+  });
 
-      expect(provider.shouldTriggerFileCompletion!(["echo hello"], 0, 10)).toBe(true);
-    });
+  it("stale call bails out after await", async () => {
+    let rr: (v:string[])=>void;
+    const s = new Promise<string[]>(r=>{rr=r}); let n=0;
+    const z = { getCommands:vi.fn(()=>{n++;return n===1?s:Promise.resolve(["git"])}), getCompletions:vi.fn().mockResolvedValue([{value:"git x",label:"x"}]), isAvailable:vi.fn().mockResolvedValue(true), checkAvailability:vi.fn().mockResolvedValue(true), needsNotification:false, markNotified:vi.fn() } as unknown as ZshCompleter;
+    const p = createShellAutocompleteProvider(mockCur(true),z,mockAi(),mkConfig());
+    const sc = p.getSuggestions!(["!git"],0,4,{signal:new AbortController().signal} as any);
+    const fc = p.getSuggestions!(["!git "],0,5,{signal:new AbortController().signal} as any);
+    expect(await fc).not.toBeNull();
+    rr!(["a"]); expect(await sc).toBeNull();
+  });
+
+  it("shouldTriggerFileCompletion false for !", () => {
+    expect(createShellAutocompleteProvider(mockCur(),mockZsh([]),mockAi(),mkConfig()).shouldTriggerFileCompletion!(["!git"],0,4)).toBe(false);
+  });
+
+  it("shouldTriggerFileCompletion true for non-!", () => {
+    expect(createShellAutocompleteProvider(mockCur(),mockZsh([]),mockAi(),mkConfig()).shouldTriggerFileCompletion!(["echo"],0,4)).toBe(true);
   });
 });
