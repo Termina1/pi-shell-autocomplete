@@ -52,11 +52,12 @@ export class AiCompleter {
 
           const cmds = items.slice(0, 8).map((i) => i.value).join(", ");
           const result = await completion.generateInfillCompletion(
-            `# available: ${cmds}\n${token}`, "",
+            `# Choose one option and complete it naturally with arguments: ${cmds}\n${token}`,
+            "",
             { maxTokens: this.config.maxTokens, temperature: 0 },
           );
 
-          const cleaned = result.split(/[\n\r]/)[0]?.trim() ?? "";
+          const cleaned = result.split(/[\n\r]/)[0]?.trim().split(/[,\s]+/)[0] ?? "";
           if (cleaned.length > 0 && cleaned.length < 100) {
             this.cache.set(token, cleaned);
             onResult(token, cleaned);

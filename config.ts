@@ -91,7 +91,7 @@ export const defaultConfig: ShellAutocompleteConfig = {
     enabled: true,
     modelPath: "models/starcoder2-3b-Q4_K_M.gguf",
     debounceMs: 400,
-    maxTokens: 20,
+    maxTokens: 40,
     contextSize: 2048,
   },
   ghost: {
