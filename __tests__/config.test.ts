@@ -139,4 +139,57 @@ describe("createConfig", () => {
     });
     expect(config.zshWorker).toEqual(defaultConfig.zshWorker);
   });
+
+  it("includes default temperature", () => {
+    const config = createConfig();
+    expect(config.ai.temperature).toBe(0.3);
+  });
+
+  it("overrides temperature", () => {
+    const config = createConfig({ ai: { temperature: 0.7 } });
+    expect(config.ai.temperature).toBe(0.7);
+  });
+
+  it("includes default gitContext", () => {
+    const config = createConfig();
+    expect(config.ai.gitContext).toEqual({ enabled: true, maxStatusLines: 15, cacheTtlMs: 10000 });
+  });
+
+  it("overrides gitContext partially", () => {
+    const config = createConfig({ ai: { gitContext: { maxStatusLines: 5 } } });
+    expect(config.ai.gitContext.enabled).toBe(true);
+    expect(config.ai.gitContext.maxStatusLines).toBe(5);
+    expect(config.ai.gitContext.cacheTtlMs).toBe(10000);
+  });
+
+  it("includes default projectContext", () => {
+    const config = createConfig();
+    expect(config.ai.projectContext).toEqual({ enabled: true, cacheTtlMs: 60000 });
+  });
+
+  it("overrides projectContext partially", () => {
+    const config = createConfig({ ai: { projectContext: { enabled: false } } });
+    expect(config.ai.projectContext.enabled).toBe(false);
+    expect(config.ai.projectContext.cacheTtlMs).toBe(60000);
+  });
+
+  it("includes default conversationContext", () => {
+    const config = createConfig();
+    expect(config.ai.conversationContext).toEqual({ enabled: true, maxChars: 500, cacheTtlMs: 5000 });
+  });
+
+  it("overrides conversationContext partially", () => {
+    const config = createConfig({ ai: { conversationContext: { maxChars: 200 } } });
+    expect(config.ai.conversationContext.enabled).toBe(true);
+    expect(config.ai.conversationContext.maxChars).toBe(200);
+    expect(config.ai.conversationContext.cacheTtlMs).toBe(5000);
+  });
+
+  it("resolveModelPath still works with new config shape", () => {
+    // The config now has new fields; resolveModelPath just reads modelPath/modelPriority
+    const config = createConfig({ ai: { modelPriority: ["models/test.gguf"] } });
+    expect(config.ai.modelPriority).toEqual(["models/test.gguf"]);
+    expect(config.ai.gitContext.enabled).toBe(true); // new fields present
+    expect(config.ai.temperature).toBe(0.3);
+  });
 });

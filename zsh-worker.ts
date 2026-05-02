@@ -7,8 +7,7 @@ import type { CompletionItem } from "./zsh-completer";
 
 /**
  * Persistent zsh worker that serves positional completions through a single,
- * long-running PTY. Replaces the per-query spawn used by the legacy
- * `captureCompletions` (zsh-pty.ts) path.
+ * long-running PTY.
  *
  * Protocol
  * ---------

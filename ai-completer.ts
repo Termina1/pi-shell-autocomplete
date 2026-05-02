@@ -79,8 +79,23 @@ export function resolveModelPath(
   return null;
 }
 
+/**
+ * Context data collected from all sources for a single prediction.
+ */
+export interface PredictionContext {
+  items: AutocompleteItem[];
+  fileCtx: string[];
+  histCtx: string[];
+  gitCtx: string | null;
+  projectCtx: string | null;
+  conversationCtx: string | null;
+}
+
 export class AiCompleter {
   private cache = new LruCache<string, string>(200, 50);
+  // Fast cache: token → result with short expiry for instant keystroke repeats
+  private fastCache = new Map<string, { result: string; at: number }>();
+  private fastCacheTtlMs = 3000; // 3 seconds — covers rapid typing of same token
   private doPredict: ReturnType<typeof debounce>;
   private contextCollector: ContextCollector;
 
@@ -95,24 +110,60 @@ export class AiCompleter {
         token: string,
         items: AutocompleteItem[],
         onResult: GhostCallback,
-        fileCtx: string[],
-        histCtx: string[],
       ) => {
         try {
+          // Collect all context sources in parallel (once per debounce window)
+          const results = await Promise.allSettled([
+            this.config.fileContext.enabled
+              ? this.contextCollector.getFileContext() : Promise.resolve([]),
+            this.config.historyContext.enabled
+              ? this.contextCollector.getHistoryContext() : Promise.resolve([]),
+            this.config.gitContext.enabled
+              ? this.contextCollector.getGitContext() : Promise.resolve(null),
+            this.config.projectContext.enabled
+              ? this.contextCollector.getProjectContext() : Promise.resolve(null),
+            this.config.conversationContext.enabled
+              ? this.contextCollector.getConversationContext() : Promise.resolve(null),
+          ]);
+
+          const ctx: PredictionContext = {
+            items,
+            fileCtx: unwrapSettled(results[0]!, []),
+            histCtx: unwrapSettled(results[1]!, []),
+            gitCtx: unwrapSettled(results[2]!, null),
+            projectCtx: unwrapSettled(results[3]!, null),
+            conversationCtx: unwrapSettled(results[4]!, null),
+          };
+
+          // Check full cache (context-aware key) before running inference
+          const cacheKey = makeCacheKey(token, ctx);
+          const cached = this.cache.get(cacheKey);
+          if (cached !== undefined) {
+            // Populate fast cache so next keystroke hits instantly
+            this.fastCache.set(token, { result: cached, at: Date.now() });
+            onResult(token, cached);
+            return;
+          }
+
           const completion = await this.modelLoader();
           if (!completion) return;
 
-          const prompt = buildPrompt(token, items, fileCtx, histCtx);
+          const prompt = buildPrompt(token, ctx);
           const result = await completion.generateInfillCompletion(
             prompt.prefix,
             prompt.suffix,
-            { maxTokens: this.config.maxTokens, temperature: 0 },
+            {
+              maxTokens: this.config.maxTokens,
+              temperature: this.config.temperature,
+            },
           );
 
-          const cleaned = result.split(/[\n\r]/)[0]?.trim().split(/[,\s]+/)[0] ?? "";
+          // First non-empty line (model often starts output with \n)
+          const lines = result.split(/[\n\r]/).map((l: string) => l.trim()).filter(Boolean);
+          const cleaned = (lines[0] ?? "").split(/[,\s]+/)[0] ?? "";
           if (cleaned.length > 0 && cleaned.length < 100) {
-            const cacheKey = makeCacheKey(token, fileCtx, histCtx);
             this.cache.set(cacheKey, cleaned);
+            this.fastCache.set(token, { result: cleaned, at: Date.now() });
             onResult(token, cleaned);
           }
         } catch {}
@@ -136,82 +187,90 @@ export class AiCompleter {
     items: AutocompleteItem[],
     onResult: GhostCallback,
   ): Promise<void> {
-    // Collect context first for cache key and prompt
-    let fileCtx: string[] = [];
-    let histCtx: string[] = [];
-    try {
-      [fileCtx, histCtx] = await Promise.all([
-        this.config.fileContext.enabled
-          ? this.contextCollector.getFileContext() : Promise.resolve([]),
-        this.config.historyContext.enabled
-          ? this.contextCollector.getHistoryContext() : Promise.resolve([]),
-      ]);
-    } catch {
-      // Context collection failed — proceed with empty context
-    }
-
-    const cacheKey = makeCacheKey(token, fileCtx, histCtx);
-    const cached = this.cache.get(cacheKey);
-    if (cached !== undefined) {
-      onResult(token, cached);
+    // Fast cache: return instantly for repeated tokens (common during typing).
+    // Expires after 3s — long enough for rapid keystrokes, short enough to
+    // not serve stale results when context changes between commands.
+    const fastEntry = this.fastCache.get(token);
+    if (fastEntry && Date.now() - fastEntry.at < this.fastCacheTtlMs) {
+      onResult(token, fastEntry.result);
       return;
     }
 
-    this.doPredict(token, items, onResult, fileCtx, histCtx);
+    // Cache miss: delegate to debounced function which collects context + infers.
+    // Context collection happens once per debounce window, not on every keystroke.
+    this.doPredict(token, items, onResult);
   }
 }
 
 /**
- * Build a structured prompt for fill-in-the-middle completion.
- * Returns { prefix, suffix } where prefix is the context and token.
+ * Unwrap a PromiseSettledResult, returning a default on rejection.
+ */
+function unwrapSettled<T>(result: PromiseSettledResult<T>, defaultValue: T): T {
+  return result.status === "fulfilled" ? result.value : defaultValue;
+}
+
+// ── Prompt Building ──────────────────────────────────────
+
+/**
+ * Build a compact prompt for fill-in-the-middle completion.
+ *
+ * Section markers use [...] so the model can distinguish context from the
+ * actual command at the end. Lines are kept short (<80 chars) for token efficiency.
  */
 export function buildPrompt(
   token: string,
-  items: AutocompleteItem[],
-  fileCtx: string[],
-  histCtx: string[],
+  ctx: PredictionContext,
 ): { prefix: string; suffix: string } {
-  const parts: string[] = [];
+  const lines: string[] = [];
 
-  // Section 1: available commands from compinit
-  if (items.length > 0) {
-    const cmds = items.slice(0, 8).map((i) => i.value).join(", ");
-    parts.push(`# Choose one option and complete it naturally with arguments: ${cmds}`);
+  // Header
+  lines.push("# shell autocomplete");
+
+  // Context sections — each on one compact line
+  if (ctx.gitCtx) lines.push(`[git] ${ctx.gitCtx}`);
+  if (ctx.projectCtx) lines.push(`[project] ${ctx.projectCtx}`);
+  if (ctx.conversationCtx) {
+    const flat = ctx.conversationCtx.replace(/\n/g, " | ");
+    lines.push(`[chat] ${flat}`);
+  }
+  if (ctx.histCtx.length > 0) {
+    lines.push(`[recent] ${ctx.histCtx.slice(-5).join(", ")}`);
+  }
+  if (ctx.fileCtx.length > 0) {
+    lines.push(`[dir] ${ctx.fileCtx.slice(0, 10).join("  ")}`);
+  }
+  if (ctx.items.length > 0) {
+    const names = ctx.items.slice(0, 10).map((i) => i.value).join(", ");
+    lines.push(`[cmds] ${names}`);
   }
 
-  // Section 2: recent command history (optional)
-  if (histCtx.length > 0) {
-    parts.push("# Recent commands:");
-    for (const cmd of histCtx) {
-      parts.push(`#   ${cmd}`);
-    }
-  }
+  // Separator + token — model completes from here
+  lines.push("");
+  lines.push(token);
 
-  // Section 3: files in current directory (optional)
-  if (fileCtx.length > 0) {
-    parts.push("# Files in directory:");
-    for (const f of fileCtx) {
-      parts.push(`#   ${f}`);
-    }
-  }
-
-  parts.push(token);
-
-  return { prefix: parts.join("\n"), suffix: "" };
+  return { prefix: lines.join("\n"), suffix: "" };
 }
+
+// ── Cache Key ────────────────────────────────────────────
 
 /**
  * Create a cache key that includes context to avoid stale results
- * when directory contents or history change.
+ * when directory contents, history, git status, or conversation change.
  */
-export function makeCacheKey(token: string, fileCtx: string[], histCtx: string[]): string {
-  // Use a fast hash of context to keep keys reasonable
+export function makeCacheKey(token: string, ctx: PredictionContext): string {
   const ctxParts: string[] = [];
-  if (fileCtx.length > 0) {
-    ctxParts.push(...fileCtx);
+
+  if (ctx.fileCtx.length > 0) {
+    ctxParts.push(...ctx.fileCtx);
   }
-  if (histCtx.length > 0) {
-    ctxParts.push(histCtx[histCtx.length - 1]!); // last entry is sufficient signal
+  if (ctx.histCtx.length > 0) {
+    ctxParts.push(ctx.histCtx[ctx.histCtx.length - 1]!); // last entry is sufficient signal
+  }
+  if (ctx.gitCtx) {
+    ctxParts.push(ctx.gitCtx);
+  }
+  if (ctx.conversationCtx) {
+    ctxParts.push(ctx.conversationCtx);
   }
 
   if (ctxParts.length === 0) {
@@ -222,10 +281,15 @@ export function makeCacheKey(token: string, fileCtx: string[], histCtx: string[]
   return `${token}|${hash}`;
 }
 
+// ── No-op Collector ──────────────────────────────────────
+
 /** No-op context collector for backward compatibility. */
 function createNoopCollector(): ContextCollector {
   return {
     getFileContext: () => Promise.resolve([]),
     getHistoryContext: () => Promise.resolve([]),
+    getGitContext: () => Promise.resolve(null),
+    getProjectContext: () => Promise.resolve(null),
+    getConversationContext: () => Promise.resolve(null),
   };
 }

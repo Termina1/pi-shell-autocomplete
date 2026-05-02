@@ -33,7 +33,7 @@ export interface ShellAutocompleteConfig {
  */
 export interface ZshWorkerConfig {
   /**
-   * When false, fall back to the legacy per-query `captureCompletions` (zsh-pty.ts) path.
+   * When false, positional completions return empty (no zsh worker spawned).
    * Default: true.
    */
   enabled: boolean;
@@ -92,11 +92,23 @@ export interface AiConfig {
   /** Context size for the llama model */
   contextSize: number;
 
+  /** Temperature for model inference (default: 0.3) */
+  temperature: number;
+
   /** File system context settings */
   fileContext: FileContextConfig;
 
   /** Command history context settings */
   historyContext: HistoryContextConfig;
+
+  /** Git context settings */
+  gitContext: GitContextConfig;
+
+  /** Project context settings */
+  projectContext: ProjectContextConfig;
+
+  /** Conversation context settings */
+  conversationContext: ConversationContextConfig;
 }
 
 export interface FileContextConfig {
@@ -118,6 +130,36 @@ export interface HistoryContextConfig {
   historyPath: string;
 }
 
+export interface GitContextConfig {
+  /** Whether to include git state in AI prompt (default: true) */
+  enabled: boolean;
+
+  /** Maximum number of status lines from git status --short (default: 15) */
+  maxStatusLines: number;
+
+  /** Cache TTL in milliseconds (default: 10000) */
+  cacheTtlMs: number;
+}
+
+export interface ProjectContextConfig {
+  /** Whether to include project type detection in AI prompt (default: true) */
+  enabled: boolean;
+
+  /** Cache TTL in milliseconds (default: 60000) */
+  cacheTtlMs: number;
+}
+
+export interface ConversationContextConfig {
+  /** Whether to include conversation context in AI prompt (default: true) */
+  enabled: boolean;
+
+  /** Maximum total characters for user + assistant messages (default: 500) */
+  maxChars: number;
+
+  /** Cache TTL in milliseconds (default: 5000) */
+  cacheTtlMs: number;
+}
+
 export interface GhostConfig {
   /** ANSI escape code for ghost text color (default: gray) */
   color: string;
@@ -135,6 +177,9 @@ export function createConfig(
     ai?: Partial<AiConfig> & {
       fileContext?: Partial<FileContextConfig>;
       historyContext?: Partial<HistoryContextConfig>;
+      gitContext?: Partial<GitContextConfig>;
+      projectContext?: Partial<ProjectContextConfig>;
+      conversationContext?: Partial<ConversationContextConfig>;
     };
     ghost?: Partial<GhostConfig>;
     zshWorker?: Partial<ZshWorkerConfig>;
@@ -143,7 +188,14 @@ export function createConfig(
   if (!overrides) return {
     ...defaultConfig,
     zshWorker: { ...defaultConfig.zshWorker },
-    ai: { ...defaultConfig.ai, fileContext: { ...defaultConfig.ai.fileContext }, historyContext: { ...defaultConfig.ai.historyContext } },
+    ai: {
+      ...defaultConfig.ai,
+      fileContext: { ...defaultConfig.ai.fileContext },
+      historyContext: { ...defaultConfig.ai.historyContext },
+      gitContext: { ...defaultConfig.ai.gitContext },
+      projectContext: { ...defaultConfig.ai.projectContext },
+      conversationContext: { ...defaultConfig.ai.conversationContext },
+    },
     ghost: { ...defaultConfig.ghost },
   };
 
@@ -168,6 +220,7 @@ export function createConfig(
       debounceMs: overrides.ai?.debounceMs ?? defaultConfig.ai.debounceMs,
       maxTokens: overrides.ai?.maxTokens ?? defaultConfig.ai.maxTokens,
       contextSize: overrides.ai?.contextSize ?? defaultConfig.ai.contextSize,
+      temperature: overrides.ai?.temperature ?? defaultConfig.ai.temperature,
       fileContext: {
         enabled: overrides.ai?.fileContext?.enabled ?? defaultConfig.ai.fileContext.enabled,
         maxFiles: overrides.ai?.fileContext?.maxFiles ?? defaultConfig.ai.fileContext.maxFiles,
@@ -176,6 +229,20 @@ export function createConfig(
         enabled: overrides.ai?.historyContext?.enabled ?? defaultConfig.ai.historyContext.enabled,
         maxEntries: overrides.ai?.historyContext?.maxEntries ?? defaultConfig.ai.historyContext.maxEntries,
         historyPath: overrides.ai?.historyContext?.historyPath ?? defaultConfig.ai.historyContext.historyPath,
+      },
+      gitContext: {
+        enabled: overrides.ai?.gitContext?.enabled ?? defaultConfig.ai.gitContext.enabled,
+        maxStatusLines: overrides.ai?.gitContext?.maxStatusLines ?? defaultConfig.ai.gitContext.maxStatusLines,
+        cacheTtlMs: overrides.ai?.gitContext?.cacheTtlMs ?? defaultConfig.ai.gitContext.cacheTtlMs,
+      },
+      projectContext: {
+        enabled: overrides.ai?.projectContext?.enabled ?? defaultConfig.ai.projectContext.enabled,
+        cacheTtlMs: overrides.ai?.projectContext?.cacheTtlMs ?? defaultConfig.ai.projectContext.cacheTtlMs,
+      },
+      conversationContext: {
+        enabled: overrides.ai?.conversationContext?.enabled ?? defaultConfig.ai.conversationContext.enabled,
+        maxChars: overrides.ai?.conversationContext?.maxChars ?? defaultConfig.ai.conversationContext.maxChars,
+        cacheTtlMs: overrides.ai?.conversationContext?.cacheTtlMs ?? defaultConfig.ai.conversationContext.cacheTtlMs,
       },
     },
     ghost: {
@@ -210,6 +277,7 @@ export const defaultConfig: ShellAutocompleteConfig = {
     debounceMs: 100,
     maxTokens: 40,
     contextSize: 2048,
+    temperature: 0.3,
     fileContext: {
       enabled: true,
       maxFiles: 20,
@@ -218,6 +286,20 @@ export const defaultConfig: ShellAutocompleteConfig = {
       enabled: true,
       maxEntries: 10,
       historyPath: "~/.zsh_history",
+    },
+    gitContext: {
+      enabled: true,
+      maxStatusLines: 15,
+      cacheTtlMs: 10000,
+    },
+    projectContext: {
+      enabled: true,
+      cacheTtlMs: 60000,
+    },
+    conversationContext: {
+      enabled: true,
+      maxChars: 500,
+      cacheTtlMs: 5000,
     },
   },
   ghost: {

@@ -24,10 +24,6 @@ vi.mock("../zsh-worker", () => {
   }
   return { ZshWorker: MockZshWorker as unknown as new (...args: unknown[]) => unknown };
 });
-// Legacy fallback path (zshWorker.enabled === false) still uses zsh-pty.
-vi.mock("../zsh-pty", () => ({
-  captureCompletions: vi.fn(),
-}));
 
 function makeConfig(overrides?: Partial<ShellAutocompleteConfig>): ShellAutocompleteConfig {
   if (!overrides) return {
@@ -295,37 +291,12 @@ describe("ZshCompleter", () => {
     });
   });
 
-  describe("getCompletions (legacy path: zshWorker.enabled === false)", () => {
-    beforeEach(async () => {
+  describe("worker disabled", () => {
+    beforeEach(() => {
       workerInstances.length = 0;
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockReset();
     });
 
-    it("falls back to captureCompletions when worker is disabled", async () => {
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockResolvedValue({
-        items: [
-          { value: "git commit", label: "commit" },
-          { value: "git clone", label: "clone" },
-        ],
-        rawOutput: "",
-      });
-      const exec = mockExec(new Map());
-      const completer = new ZshCompleter(
-        makeConfig({ zshWorker: { ...defaultConfig.zshWorker, enabled: false } }),
-        exec,
-      );
-      const items = await completer.getCompletions("git c");
-      expect(items.map((i) => i.label).sort()).toEqual(["clone", "commit"]);
-      expect(captureCompletions).toHaveBeenCalled();
-      // Worker is NOT instantiated in this mode.
-      expect(workerInstances.length).toBe(0);
-    });
-
-    it("returns empty when legacy capture rejects", async () => {
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockRejectedValue(new Error("pty failed"));
+    it("returns empty when worker is disabled", async () => {
       const exec = mockExec(new Map());
       const completer = new ZshCompleter(
         makeConfig({ zshWorker: { ...defaultConfig.zshWorker, enabled: false } }),
@@ -333,6 +304,7 @@ describe("ZshCompleter", () => {
       );
       const items = await completer.getCompletions("git c");
       expect(items).toEqual([]);
+      expect(workerInstances.length).toBe(0);
     });
   });
 });

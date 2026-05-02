@@ -135,67 +135,15 @@ export class ZshCompleter {
 
   // ── Private ────────────────────────────────────────────────
 
-  /**
-   * Query zsh for positional completions.
-   *
-   * Uses the persistent `ZshWorker` when `config.zshWorker.enabled` is true
-   * (default). Falls back to the legacy per-query `captureCompletions` when
-   * the worker is disabled — this is the rollback path retained for one
-   * release per the migration plan in design.md.
-   */
   private async queryPositionalCompletions(
     token: string,
   ): Promise<CompletionItem[]> {
-    if (this.worker) {
-      try {
-        return await this.worker.query(token);
-      } catch {
-        return [];
-      }
-    }
+    if (!this.worker) return [];
     try {
-      const { captureCompletions } = await import("./zsh-pty");
-      const result = await captureCompletions(token, this.config);
-      return result.items;
+      return await this.worker.query(token);
     } catch {
       return [];
     }
-  }
-
-  /**
-   * Parse newline-separated completion candidates into CompletionItems.
-   */
-  private parseCompletionLines(
-    token: string,
-    output: string,
-  ): CompletionItem[] {
-    const items: CompletionItem[] = [];
-    const seen = new Set<string>();
-
-    for (const line of output.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      // Skip prompt fragments and garbage
-      if (trimmed.startsWith("❯") || trimmed.startsWith("%")) continue;
-      if (/\d{2}:\d{2}/.test(trimmed)) continue; // timestamps
-      if (/^\d+$/.test(trimmed)) continue; // pure numbers
-
-      if (token.includes(" ")) {
-        const firstWord = token.split(" ")[0]!;
-        const full = `${firstWord} ${trimmed}`;
-        if (!seen.has(full)) {
-          seen.add(full);
-          items.push({ value: full, label: trimmed });
-        }
-      } else {
-        if (!seen.has(trimmed)) {
-          seen.add(trimmed);
-          items.push({ value: trimmed, label: trimmed });
-        }
-      }
-    }
-
-    return items;
   }
 
   private isValidCommand(name: string): boolean {

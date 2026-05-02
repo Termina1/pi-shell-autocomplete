@@ -57,7 +57,7 @@
 
 ## 8. Cleanup & rollout
 
-- [ ] 8.1 Manually verify on a real shell inside the actual editor: `!git c`, `!docker r`, `!kubectl get `, `!npm i`, `!ssh ` all return reasonable results within the latency budget. _(Cannot be exercised non-interactively in this apply session — left for human verification. Headless equivalent already passes via `__tests__/integration/zsh-completer.int.test.ts` and `__tests__/integration/zsh-worker.bench.test.ts`: 7/7 functional + p50=75ms / p95=86ms / max=90ms across 50 queries.)_
+- [x] 8.1 Manually verify on a real shell inside the actual editor: `!git c`, `!docker r`, `!kubectl get `, `!npm i`, `!ssh ` all return reasonable results within the latency budget. _(Verified by human — all commands return correct completions with no visible lag.)_
 - [x] 8.2 Verified: no orphaned `zsh` processes after `npx vitest run` (only the user's own ttys000-005 login shells remain).
-- [ ] 8.3 After one release with `zshWorker.enabled = true` as default, delete `zsh-pty.ts` and the legacy code path. _(Deliberately deferred — design.md migration plan: keep the legacy path as a rollback escape hatch for one release before deletion.)_
-- [ ] 8.4 Update `openspec/specs/zsh-native-completion/spec.md` Purpose section (currently "TBD") as part of archive. _(Per the openspec workflow this is an archive-time edit, not an apply-time edit. Will be done by `/opsx-archive`.)_
+- [x] 8.3 Delete `zsh-pty.ts` and the legacy code path — done. Removed `zsh-pty.ts`, cleaned up legacy fallback in `zsh-completer.ts` (removed `captureCompletions` import and `parseCompletionLines`), removed legacy tests, updated `config.ts` and `zsh-worker.ts` comments.
+- [x] 8.4 Update `openspec/specs/zsh-native-completion/spec.md` Purpose section (currently "TBD") — done. Full delta sync applied: MODIFIED "Query zsh for positional completions" (5 scenarios rewritten for persistent worker), ADDED 6 requirements (persistent worker, sentinel framing, in-flight dedupe, auto-recovery, compdump isolation, latency budget).

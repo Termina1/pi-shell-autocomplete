@@ -49,8 +49,15 @@ export default function (pi: ExtensionAPI) {
 
     ctx.ui.notify("shell-autocomplete ready", "success");
 
-    // Create context collector with current working directory
-    const contextCollector = createContextCollector(config.ai, process.cwd());
+    // Create context collector with current working directory, git executor, and session manager
+    const gitExec = (command: string, args: string[], opts?: { timeout?: number }) =>
+      pi.exec(command, args, opts ?? {});
+    const contextCollector = createContextCollector(
+      config.ai,
+      process.cwd(),
+      gitExec,
+      ctx.sessionManager,
+    );
     const aiCompleter = new AiCompleter(config.ai, undefined, contextCollector);
 
     let editorRef: ShellAutocompleteEditor | null = null;
