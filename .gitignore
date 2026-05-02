@@ -1,3 +1,1 @@
 node_modules/
-__tests__/integration/*
-!__tests__/integration/zsh-worker.bench.test.ts
