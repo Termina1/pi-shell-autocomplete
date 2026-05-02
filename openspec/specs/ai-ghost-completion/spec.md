@@ -1,7 +1,7 @@
 # ai-ghost-completion Specification
 
 ## Purpose
-TBD - created by archiving change shell-autocomplete-rewrite. Update Purpose after archive.
+Local FIM-model-based ghost-text prediction for shell command completion triggered by `!` in the Pi TUI editor. Covers lazy model loading, instruct-style prompt building with all configurable context sources (compinit results, shell history, directory listing, git state, project type, conversation), debounced inference, context-aware LRU caching, configurable temperature, and graceful failure handling.
 ## Requirements
 ### Requirement: Lazy model loading
 The AI model SHALL be loaded lazily on the first autocomplete request, not at extension startup.
@@ -17,19 +17,22 @@ The AI model SHALL be loaded lazily on the first autocomplete request, not at ex
 - **THEN** the existing loaded model SHALL be used without reloading
 
 ### Requirement: AI ghost text prediction
-The system SHALL use a local FIM model to predict the most likely completion of a partial shell command and display it as ghost text. The AI prompt SHALL include file system and command history context when enabled.
+The system SHALL use a local FIM model to predict the most likely completion of a partial shell command and display it as ghost text. The AI prompt SHALL include a role instruction and all enabled context sources (compinit results, shell history, directory listing, git state, project type, conversation).
 
-#### Scenario: Single-token prediction with full context
+#### Scenario: Prediction with instruct-style prompt
 - **WHEN** the user types `!git co`
 - **THEN** the AI model SHALL be queried with fill-in-the-middle completion
-- **THEN** the prompt SHALL include available commands from compinit, recent shell history (if enabled), and directory file listing (if enabled)
+- **THEN** the prompt prefix SHALL begin with a role instruction telling the model it is a shell command predictor
+- **THEN** the prompt SHALL include all enabled context sources as labeled sections
+- **THEN** the prompt SHALL end with the token on a separate line after a blank separator line
+- **THEN** the suffix SHALL be empty
 - **THEN** the result SHALL be a single line, trimmed of whitespace, under 100 characters
 - **THEN** if the result extends the user's token (e.g., `git commit`), the suffix SHALL be shown as ghost text
 
-#### Scenario: Prediction with only compinit context (both extras disabled)
-- **WHEN** the user types `!git co` and both `fileContext.enabled` and `historyContext.enabled` are `false`
-- **THEN** the prompt SHALL include only available commands from compinit (existing behavior)
-- **THEN** the result SHALL be processed identically
+#### Scenario: Role instruction is always present
+- **WHEN** the user types any shell prefix
+- **THEN** the prompt SHALL always include the role instruction, regardless of which context sources are enabled
+- **THEN** the instruction SHALL tell the model to output ONLY the completion text with no explanations or formatting
 
 #### Scenario: Empty or invalid result
 - **WHEN** the AI model returns an empty string, only whitespace, or a result longer than 100 characters
@@ -52,15 +55,19 @@ AI model inference SHALL be debounced to avoid excessive computation during rapi
 - **THEN** the AI inference SHALL be triggered for the current token
 
 ### Requirement: AI result caching
-AI ghost text predictions SHALL be cached by exact input token combined with context hash, with LRU eviction.
+AI ghost text predictions SHALL be cached by exact input token combined with a hash of all enabled context sources, with LRU eviction. The cache key SHALL include file context, history context, git context, and conversation context when enabled.
 
 #### Scenario: Cache hit with same context
-- **WHEN** the user types a token that was previously predicted by AI with the same file and history context
+- **WHEN** the user types a token that was previously predicted by AI with the same context across all enabled sources (file, history, git, project, conversation)
 - **THEN** the cached result SHALL be shown immediately without model inference
 
-#### Scenario: Cache miss with different context
-- **WHEN** the user types a token that was previously predicted, but the directory contents or history have changed
-- **THEN** a new inference SHALL be triggered (context-aware cache key)
+#### Scenario: Cache miss with different git context
+- **WHEN** the user types a previously-predicted token but git status has changed (files modified, branch switched)
+- **THEN** a new inference SHALL be triggered (context-aware cache key reflects git state change)
+
+#### Scenario: Cache miss with different conversation context
+- **WHEN** the user types a previously-predicted token but the conversation has advanced (new user/assistant messages)
+- **THEN** a new inference SHALL be triggered (context-aware cache key reflects conversation change)
 
 #### Scenario: Cache eviction
 - **WHEN** the AI cache exceeds 200 entries
@@ -82,7 +89,7 @@ AI model loading or inference failures SHALL NOT affect the dropdown autocomplet
 - **THEN** the dropdown SHALL continue to work normally
 
 ### Requirement: Configurable AI settings
-AI behavior SHALL be configurable by the user, including model priority, context sources, and all existing settings.
+AI behavior SHALL be configurable by the user, including model priority, temperature, all context sources, and all existing settings.
 
 #### Scenario: AI disabled
 - **WHEN** the configuration has `ai.enabled = false`
@@ -92,6 +99,10 @@ AI behavior SHALL be configurable by the user, including model priority, context
 - **WHEN** the configuration specifies `ai.modelPriority = ["models/my-model.gguf"]`
 - **THEN** the system SHALL attempt to load models in that priority order
 
+#### Scenario: Custom temperature
+- **WHEN** the configuration specifies `ai.temperature = 0.5`
+- **THEN** the model SHALL be invoked with temperature `0.5`
+
 #### Scenario: Custom context limits
 - **WHEN** the configuration specifies `ai.historyContext.maxEntries = 5` and `ai.fileContext.maxFiles = 10`
 - **THEN** the prompt SHALL include at most 5 history entries and 10 files
@@ -100,28 +111,63 @@ AI behavior SHALL be configurable by the user, including model priority, context
 - **WHEN** the configuration specifies `ai.historyContext.historyPath = "/custom/path/.zsh_history"`
 - **THEN** the system SHALL read history from that path instead of the default `~/.zsh_history`
 
-### Requirement: Structured multi-source prompt format
-The AI prompt SHALL follow a structured format with optional sections for compinit results, command history, and file listing.
+#### Scenario: Git context disabled
+- **WHEN** the configuration has `ai.gitContext.enabled = false`
+- **THEN** the prompt SHALL NOT include a git context section
+- **THEN** no git commands SHALL be executed
+
+#### Scenario: Project context disabled
+- **WHEN** the configuration has `ai.projectContext.enabled = false`
+- **THEN** the prompt SHALL NOT include a project context section
+- **THEN** no project file detection SHALL be performed
+
+#### Scenario: Conversation context disabled
+- **WHEN** the configuration has `ai.conversationContext.enabled = false`
+- **THEN** the prompt SHALL NOT include a conversation context section
+
+### Requirement: Configurable model temperature
+The system SHALL support a configurable temperature parameter for AI model inference to control prediction determinism.
+
+#### Scenario: Default temperature
+- **WHEN** the configuration does not specify `ai.temperature`
+- **THEN** the model SHALL use a temperature of `0.3` for inference
+
+#### Scenario: Custom temperature
+- **WHEN** the configuration specifies `ai.temperature = 0.7`
+- **THEN** the model SHALL be invoked with temperature `0.7`
+
+#### Scenario: Zero temperature for determinism
+- **WHEN** the configuration specifies `ai.temperature = 0`
+- **THEN** the model SHALL use deterministic inference (always same output for same input)
+
+### Requirement: Instruct-style prompt format
+The AI prompt SHALL follow an instruct-style format with a header line followed by labeled context sections, ending with the token to complete.
 
 #### Scenario: Full prompt with all sources enabled
 - **WHEN** all context sources are enabled and produce results
-- **THEN** the prompt SHALL have this structure (each section only if non-empty):
+- **THEN** the prompt SHALL have this structure:
 ```
-# Choose one option and complete it naturally with arguments: <cmd1>, <cmd2>, ...
-# Recent commands:
-#   <hist1>
-#   <hist2>
-# Files in directory:
-#   <file1>
-#   <file2>
-<token>
+# shell autocomplete
+[git] branch=feature/auth, M src/auth.ts
+[project] npm package "my-app"
+[chat] User: fix auth | Assistant: check token.ts
+[recent] git status, npm test
+[dir] src/  package.json
+[cmds] commit, checkout, clone
+
+git c
 ```
 
-#### Scenario: Prompt with only history (files disabled, dir empty)
-- **WHEN** `fileContext.enabled = false` and history has entries
-- **THEN** the prompt SHALL skip the `# Files in directory:` section entirely
+#### Scenario: Prompt with only some context sources enabled
+- **WHEN** only git and project context are enabled and produce results
+- **THEN** the prompt SHALL include `[git]` and `[project]` sections
+- **THEN** the prompt SHALL NOT include `[chat]`, `[recent]`, or `[dir]` sections
 
-#### Scenario: Prompt with only files (history disabled)
-- **WHEN** `historyContext.enabled = false` and directory has files
-- **THEN** the prompt SHALL skip the `# Recent commands:` section entirely
+#### Scenario: Prompt with no context sources enabled
+- **WHEN** all optional context sources are disabled
+- **THEN** the prompt SHALL still include the header line `# shell autocomplete`
+- **THEN** the prompt SHALL end with the token and have no `[...]` sections
 
+#### Scenario: Empty context section skipped
+- **WHEN** a context source is enabled but produces no data (e.g., empty directory, git not available, no project files found)
+- **THEN** that section SHALL be omitted entirely from the prompt
