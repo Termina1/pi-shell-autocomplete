@@ -19,7 +19,19 @@
 
 ## Installation
 
-Place the extension in `~/.pi/agent/extensions/shell-autocomplete/`. It auto-discovers on Pi restart or `/reload`.
+Install as a Pi package from npm:
+
+```bash
+pi install npm:pi-shell-autocomplete
+```
+
+Or try the local checkout while developing:
+
+```bash
+pi -e .
+```
+
+After installation, restart Pi or run `/reload`.
 
 ## Configuration
 

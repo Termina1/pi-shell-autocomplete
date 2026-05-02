@@ -1,8 +1,54 @@
 {
+  "name": "pi-shell-autocomplete",
+  "version": "0.1.0",
+  "description": "Shell command autocomplete extension for pi with zsh native completions and local AI ghost text.",
+  "type": "module",
+  "main": "./index.ts",
+  "repository": "github:Termina1/pi-shell-autocomplete",
+  "homepage": "https://github.com/Termina1/pi-shell-autocomplete#readme",
+  "bugs": {
+    "url": "https://github.com/Termina1/pi-shell-autocomplete/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "autocomplete",
+    "shell",
+    "zsh"
+  ],
+  "files": [
+    "index.ts",
+    "ai-completer.ts",
+    "cache.ts",
+    "config.ts",
+    "context-collector.ts",
+    "editor.ts",
+    "prefix.ts",
+    "provider.ts",
+    "zsh-completer.ts",
+    "zsh-worker.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "npm run test:unit",
+    "test:unit": "vitest run __tests__/*.test.ts",
+    "pack:dry-run": "npm pack --dry-run",
+    "release": "node scripts/release.mjs",
+    "release:dry-run": "node scripts/release.mjs --dry-run"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "dependencies": {
     "lodash.debounce": "^4.0.8",
     "node-llama-cpp": "^3.18.1",
     "node-pty": "^1.1.0"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
   },
   "devDependencies": {
     "@types/lodash.debounce": "^4.0.9",
