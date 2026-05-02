@@ -2,16 +2,44 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ZshCompleter, type ShellExecutor } from "../zsh-completer";
 import { defaultConfig, type ShellAutocompleteConfig } from "../config";
 
-// Mock node-pty for unit tests
+// Mock the persistent worker (used when zshWorker.enabled is true; the default).
+// We expose the array of constructed instances via vi.hoisted so tests can
+// reach in and seed/inspect each worker mock without fighting hoisting.
+const { workerInstances } = vi.hoisted(() => ({ workerInstances: [] as Array<{
+  query: ReturnType<typeof vi.fn>;
+  prewarm: ReturnType<typeof vi.fn>;
+  dispose: ReturnType<typeof vi.fn>;
+}> }));
+vi.mock("../zsh-worker", () => {
+  function MockZshWorker(this: any) {
+    this.query = vi.fn();
+    this.prewarm = vi.fn().mockResolvedValue(undefined);
+    this.dispose = vi.fn();
+    this.isReady = true;
+    this.isAlive = true;
+    this.isDisposed = false;
+    this.isPermanentlyDisabled = false;
+    this.respawnCount = 0;
+    workerInstances.push(this);
+  }
+  return { ZshWorker: MockZshWorker as unknown as new (...args: unknown[]) => unknown };
+});
+// Legacy fallback path (zshWorker.enabled === false) still uses zsh-pty.
 vi.mock("../zsh-pty", () => ({
   captureCompletions: vi.fn(),
 }));
 
 function makeConfig(overrides?: Partial<ShellAutocompleteConfig>): ShellAutocompleteConfig {
-  if (!overrides) return { ...defaultConfig, ai: { ...defaultConfig.ai }, ghost: { ...defaultConfig.ghost } };
+  if (!overrides) return {
+    ...defaultConfig,
+    zshWorker: { ...defaultConfig.zshWorker },
+    ai: { ...defaultConfig.ai },
+    ghost: { ...defaultConfig.ghost },
+  };
   return {
     ...defaultConfig,
     ...overrides,
+    zshWorker: { ...defaultConfig.zshWorker, ...(overrides.zshWorker ?? {}) },
     ai: { ...defaultConfig.ai, ...overrides.ai },
     ghost: { ...defaultConfig.ghost, ...overrides.ghost },
   };
@@ -192,54 +220,119 @@ describe("ZshCompleter", () => {
     });
   });
 
-  describe("getCompletions", () => {
-    beforeEach(async () => {
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockReset();
+  describe("getCompletions (worker path)", () => {
+    beforeEach(() => {
+      workerInstances.length = 0;
     });
 
-    it("returns positional completions", async () => {
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockResolvedValue({
-        items: [
-          { value: "git commit", label: "commit" },
-          { value: "git checkout", label: "checkout" },
-          { value: "git clean", label: "clean" },
-        ],
-        rawOutput: "",
-      });
-
+    it("returns positional completions from the worker", async () => {
       const exec = mockExec(new Map());
       const completer = new ZshCompleter(makeConfig(), exec);
-      const items = await completer.getCompletions("git c");
+      const w = workerInstances[0]!;
+      w.query.mockResolvedValue([
+        { value: "git commit", label: "commit" },
+        { value: "git checkout", label: "checkout" },
+        { value: "git clean", label: "clean" },
+      ]);
 
+      const items = await completer.getCompletions("git c");
       expect(items.length).toBeGreaterThan(0);
       expect(items.some((i) => i.label === "commit")).toBe(true);
-      expect(captureCompletions).toHaveBeenCalled();
+      expect(w.query).toHaveBeenCalledWith("git c");
     });
 
-    it("returns empty when capture fails", async () => {
-      const { captureCompletions } = await import("../zsh-pty");
-      vi.mocked(captureCompletions).mockRejectedValue(new Error("pty failed"));
-
+    it("returns empty when the worker rejects", async () => {
       const exec = mockExec(new Map());
       const completer = new ZshCompleter(makeConfig(), exec);
+      const w = workerInstances[0]!;
+      w.query.mockRejectedValue(new Error("worker failed"));
       const items = await completer.getCompletions("git c");
       expect(items).toEqual([]);
     });
 
     it("respects maxDropdownItems", async () => {
-      const { captureCompletions } = await import("../zsh-pty");
+      const exec = mockExec(new Map());
+      const completer = new ZshCompleter(makeConfig({ maxDropdownItems: 5 }), exec);
+      const w = workerInstances[0]!;
+      // Worker normally caps internally; here we return many to exercise the
+      // ZshCompleter-level slice in `getCompletions`.
       const manyItems = Array.from({ length: 30 }, (_, i) => ({
         value: `cmd${i}`,
         label: `cmd${i}`,
       }));
-      vi.mocked(captureCompletions).mockResolvedValue({ items: manyItems, rawOutput: "" });
-
-      const exec = mockExec(new Map());
-      const completer = new ZshCompleter(makeConfig({ maxDropdownItems: 5 }));
+      w.query.mockResolvedValue(manyItems);
       const items = await completer.getCompletions("cmd");
       expect(items.length).toBeLessThanOrEqual(5);
+    });
+
+    it("prewarms the worker when zshWorker.prewarm is true", () => {
+      const exec = mockExec(new Map());
+      new ZshCompleter(
+        makeConfig({ zshWorker: { ...defaultConfig.zshWorker, prewarm: true } }),
+        exec,
+      );
+      const w = workerInstances[0]!;
+      expect(w.prewarm).toHaveBeenCalled();
+    });
+
+    it("does not prewarm when zshWorker.prewarm is false", () => {
+      const exec = mockExec(new Map());
+      new ZshCompleter(
+        makeConfig({ zshWorker: { ...defaultConfig.zshWorker, prewarm: false } }),
+        exec,
+      );
+      const w = workerInstances[0]!;
+      expect(w.prewarm).not.toHaveBeenCalled();
+    });
+
+    it("dispose() forwards to the worker and is idempotent", () => {
+      const exec = mockExec(new Map());
+      const completer = new ZshCompleter(makeConfig(), exec);
+      const w = workerInstances[0]!;
+      completer.dispose();
+      completer.dispose();
+      expect(w.dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("getCompletions (legacy path: zshWorker.enabled === false)", () => {
+    beforeEach(async () => {
+      workerInstances.length = 0;
+      const { captureCompletions } = await import("../zsh-pty");
+      vi.mocked(captureCompletions).mockReset();
+    });
+
+    it("falls back to captureCompletions when worker is disabled", async () => {
+      const { captureCompletions } = await import("../zsh-pty");
+      vi.mocked(captureCompletions).mockResolvedValue({
+        items: [
+          { value: "git commit", label: "commit" },
+          { value: "git clone", label: "clone" },
+        ],
+        rawOutput: "",
+      });
+      const exec = mockExec(new Map());
+      const completer = new ZshCompleter(
+        makeConfig({ zshWorker: { ...defaultConfig.zshWorker, enabled: false } }),
+        exec,
+      );
+      const items = await completer.getCompletions("git c");
+      expect(items.map((i) => i.label).sort()).toEqual(["clone", "commit"]);
+      expect(captureCompletions).toHaveBeenCalled();
+      // Worker is NOT instantiated in this mode.
+      expect(workerInstances.length).toBe(0);
+    });
+
+    it("returns empty when legacy capture rejects", async () => {
+      const { captureCompletions } = await import("../zsh-pty");
+      vi.mocked(captureCompletions).mockRejectedValue(new Error("pty failed"));
+      const exec = mockExec(new Map());
+      const completer = new ZshCompleter(
+        makeConfig({ zshWorker: { ...defaultConfig.zshWorker, enabled: false } }),
+        exec,
+      );
+      const items = await completer.getCompletions("git c");
+      expect(items).toEqual([]);
     });
   });
 });

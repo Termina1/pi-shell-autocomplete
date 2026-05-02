@@ -32,6 +32,14 @@ All settings have sensible defaults. Override via environment or extension confi
   zshCompletionTimeoutMs: 3000,  // timeout for zsh queries
   commandsCacheTtlMs: 30000,     // command list cache TTL
   positionalCacheTtlMs: 15000,   // positional completion cache TTL
+  zshWorker: {
+    enabled: true,                                            // route positional queries through the persistent worker
+    prewarm: true,                                            // start the worker eagerly so the first query is fast
+    idleTimeoutMs: 0,                                         // 0 = never; >0 disposes the worker after N ms idle
+    compinitDumpPath: "~/.cache/pi-shell-autocomplete/zcompdump", // dedicated compdump (isolated from your ~/.zcompdump)
+    sourceRcFile: false,                                      // true = start the worker as `zsh -i` (slower, picks up rc functions)
+    maxRespawnsPerMinute: 3,                                  // hard limit before the worker is permanently disabled in this session
+  },
   ai: {
     enabled: true,
     // Priority-ordered list of GGUF model paths. First existing file is used.
@@ -111,9 +119,46 @@ All AI processing happens **locally** on your machine. No data leaves your compu
 - Command history is read from your local `.zsh_history` file and stays on disk
 - The llama model runs entirely in-process via node-llama-cpp
 
+## Performance
+
+Positional completions (subcommands, flags, args) go through a persistent
+`ZshWorker` PTY that is started once and reused for the whole editor session
+— instead of spawning a new zsh subshell per query. Cache-miss latency on a
+typical machine after warmup:
+
+- p50 ≈ 75 ms, p95 ≈ 90 ms (12–15× better than the legacy per-query path which
+  paid ≥1100 ms in fixed setup + sleep cost).
+
+Command list (`!git`, `!docker`, ...) results are still served from the
+30-second `commandsCacheTtlMs` cache and don't touch the worker.
+
+If the worker misbehaves (rare — it auto-respawns up to
+`maxRespawnsPerMinute` times), set `zshWorker.enabled: false` to fall back to
+the legacy per-query path while you investigate.
+
+### Benchmark
+
+There is a real-zsh latency benchmark under
+`__tests__/integration/zsh-worker.bench.test.ts`. It is skipped in CI; to run
+it locally:
+
+```bash
+RUN_ZSH_BENCH=1 npx vitest run __tests__/integration/zsh-worker.bench.test.ts
+```
+
+It drives 50 warm cache-miss queries through `ZshWorker.query()` and asserts
+p50 ≤ 250 ms / p95 ≤ 800 ms.
+
 ## Known Issues
 
-- **Zsh positional completions via zpty can be slow** — first completion may take ~500ms. Results are cached.
+- **First query for an uncached completion function is slower** — the very
+  first time the worker invokes `_git`, `_docker`, etc. it has to autoload
+  the function (and sometimes shell out to the underlying binary). Expect
+  150–400 ms for the first call per command; subsequent calls run in
+  60–100 ms.
+- **Single-match completions are not shown in the dropdown** — when zsh
+  inserts a unique match into the buffer instead of showing a list, the
+  worker's parser returns `[]`. The AI ghost text usually fills this gap.
 - **Model loading blocks first use** — the AI model loads lazily on first `!` input, which may cause a brief delay.
 - **No bash/fish support yet** — zsh only. Multi-shell support is designed for future addition.
 - **File context on network filesystems** — `fs.readdir` may be slow on NFS/remote mounts. Disable with `fileContext.enabled: false`.

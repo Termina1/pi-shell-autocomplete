@@ -1,6 +1,7 @@
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { Cache } from "./cache";
 import type { ShellAutocompleteConfig } from "./config";
+import { ZshWorker } from "./zsh-worker";
 
 /**
  * Result of a zsh completion query.
@@ -26,6 +27,7 @@ export class ZshCompleter {
   private positionalCache: Cache<string, CompletionItem[]>;
   private available: boolean | null = null;
   private notified = false;
+  private worker: ZshWorker | null = null;
 
   constructor(
     private config: ShellAutocompleteConfig,
@@ -33,6 +35,24 @@ export class ZshCompleter {
   ) {
     this.commandsCache = new Cache(config.commandsCacheTtlMs);
     this.positionalCache = new Cache(config.positionalCacheTtlMs);
+    if (this.config.zshWorker.enabled) {
+      this.worker = new ZshWorker(this.config);
+      if (this.config.zshWorker.prewarm) {
+        // Fire-and-forget; prewarm() never throws.
+        this.worker.prewarm().catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Tear down any persistent resources (currently the zsh worker PTY).
+   * Safe to call more than once.
+   */
+  dispose(): void {
+    if (this.worker) {
+      this.worker.dispose();
+      this.worker = null;
+    }
   }
 
   async isAvailable(): Promise<boolean> {
@@ -116,11 +136,23 @@ export class ZshCompleter {
   // ── Private ────────────────────────────────────────────────
 
   /**
-   * Query zsh for positional completions using node-pty.
+   * Query zsh for positional completions.
+   *
+   * Uses the persistent `ZshWorker` when `config.zshWorker.enabled` is true
+   * (default). Falls back to the legacy per-query `captureCompletions` when
+   * the worker is disabled — this is the rollback path retained for one
+   * release per the migration plan in design.md.
    */
   private async queryPositionalCompletions(
     token: string,
   ): Promise<CompletionItem[]> {
+    if (this.worker) {
+      try {
+        return await this.worker.query(token);
+      } catch {
+        return [];
+      }
+    }
     try {
       const { captureCompletions } = await import("./zsh-pty");
       const result = await captureCompletions(token, this.config);

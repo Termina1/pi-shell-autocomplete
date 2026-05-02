@@ -99,4 +99,44 @@ describe("createConfig", () => {
     expect(config.ai.enabled).toBe(true);
     expect(config.triggerChar).toBe("!");
   });
+
+  it("includes default zshWorker", () => {
+    const config = createConfig();
+    expect(config.zshWorker).toEqual({
+      enabled: true,
+      prewarm: true,
+      idleTimeoutMs: 0,
+      compinitDumpPath: "~/.cache/pi-shell-autocomplete/zcompdump",
+      sourceRcFile: false,
+      maxRespawnsPerMinute: 3,
+    });
+  });
+
+  it("overrides zshWorker partially without dropping other fields", () => {
+    const config = createConfig({
+      zshWorker: { enabled: false, idleTimeoutMs: 60000 },
+    });
+    expect(config.zshWorker.enabled).toBe(false);
+    expect(config.zshWorker.idleTimeoutMs).toBe(60000);
+    // other zshWorker fields preserved
+    expect(config.zshWorker.prewarm).toBe(true);
+    expect(config.zshWorker.sourceRcFile).toBe(false);
+    expect(config.zshWorker.maxRespawnsPerMinute).toBe(3);
+    expect(config.zshWorker.compinitDumpPath).toBe(defaultConfig.zshWorker.compinitDumpPath);
+  });
+
+  it("overrides zshWorker.compinitDumpPath", () => {
+    const config = createConfig({
+      zshWorker: { compinitDumpPath: "/tmp/zcompdump-test" },
+    });
+    expect(config.zshWorker.compinitDumpPath).toBe("/tmp/zcompdump-test");
+  });
+
+  it("zshWorker is independent of ai/ghost overrides", () => {
+    const config = createConfig({
+      ai: { enabled: false },
+      ghost: { color: "\x1b[31m" },
+    });
+    expect(config.zshWorker).toEqual(defaultConfig.zshWorker);
+  });
 });

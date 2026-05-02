@@ -18,11 +18,59 @@ export interface ShellAutocompleteConfig {
   /** TTL for cached positional completions in ms */
   positionalCacheTtlMs: number;
 
+  /** Persistent zsh worker settings (positional completion path) */
+  zshWorker: ZshWorkerConfig;
+
   /** AI ghost text settings */
   ai: AiConfig;
 
   /** Ghost text rendering settings */
   ghost: GhostConfig;
+}
+
+/**
+ * Settings for the persistent zsh worker that serves positional completions.
+ */
+export interface ZshWorkerConfig {
+  /**
+   * When false, fall back to the legacy per-query `captureCompletions` (zsh-pty.ts) path.
+   * Default: true.
+   */
+  enabled: boolean;
+
+  /**
+   * Start the worker in the background as soon as the completer is constructed,
+   * so the first user query doesn't pay the bootstrap cost. Default: true.
+   */
+  prewarm: boolean;
+
+  /**
+   * Idle shutdown timeout in ms. When > 0, the worker is disposed after this much
+   * idle time and re-spawned lazily on the next query. 0 = never. Default: 0.
+   */
+  idleTimeoutMs: number;
+
+  /**
+   * Path passed to `compinit -d <path>` inside the worker so the compdump is
+   * cached across editor restarts and isolated from the user's own ~/.zcompdump.
+   * Tilde expansion is performed at use-time. Default:
+   * `~/.cache/pi-shell-autocomplete/zcompdump`.
+   */
+  compinitDumpPath: string;
+
+  /**
+   * If true, start the worker as `zsh -i` and source the user's rc files.
+   * Slower startup but picks up user-defined functions/aliases for completion.
+   * Default: false (use minimal `zsh -f`).
+   */
+  sourceRcFile: boolean;
+
+  /**
+   * After this many automatic respawns within a 60s window, the worker is
+   * marked unavailable for the rest of the session and `query()` short-circuits
+   * to []. Default: 3.
+   */
+  maxRespawnsPerMinute: number;
 }
 
 export interface AiConfig {
@@ -89,10 +137,12 @@ export function createConfig(
       historyContext?: Partial<HistoryContextConfig>;
     };
     ghost?: Partial<GhostConfig>;
+    zshWorker?: Partial<ZshWorkerConfig>;
   },
 ): ShellAutocompleteConfig {
   if (!overrides) return {
     ...defaultConfig,
+    zshWorker: { ...defaultConfig.zshWorker },
     ai: { ...defaultConfig.ai, fileContext: { ...defaultConfig.ai.fileContext }, historyContext: { ...defaultConfig.ai.historyContext } },
     ghost: { ...defaultConfig.ghost },
   };
@@ -103,6 +153,14 @@ export function createConfig(
     zshCompletionTimeoutMs: overrides.zshCompletionTimeoutMs ?? defaultConfig.zshCompletionTimeoutMs,
     commandsCacheTtlMs: overrides.commandsCacheTtlMs ?? defaultConfig.commandsCacheTtlMs,
     positionalCacheTtlMs: overrides.positionalCacheTtlMs ?? defaultConfig.positionalCacheTtlMs,
+    zshWorker: {
+      enabled: overrides.zshWorker?.enabled ?? defaultConfig.zshWorker.enabled,
+      prewarm: overrides.zshWorker?.prewarm ?? defaultConfig.zshWorker.prewarm,
+      idleTimeoutMs: overrides.zshWorker?.idleTimeoutMs ?? defaultConfig.zshWorker.idleTimeoutMs,
+      compinitDumpPath: overrides.zshWorker?.compinitDumpPath ?? defaultConfig.zshWorker.compinitDumpPath,
+      sourceRcFile: overrides.zshWorker?.sourceRcFile ?? defaultConfig.zshWorker.sourceRcFile,
+      maxRespawnsPerMinute: overrides.zshWorker?.maxRespawnsPerMinute ?? defaultConfig.zshWorker.maxRespawnsPerMinute,
+    },
     ai: {
       enabled: overrides.ai?.enabled ?? defaultConfig.ai.enabled,
       modelPath: overrides.ai?.modelPath ?? defaultConfig.ai.modelPath,
@@ -132,6 +190,14 @@ export const defaultConfig: ShellAutocompleteConfig = {
   zshCompletionTimeoutMs: 3000,
   commandsCacheTtlMs: 30000,
   positionalCacheTtlMs: 15000,
+  zshWorker: {
+    enabled: true,
+    prewarm: true,
+    idleTimeoutMs: 0,
+    compinitDumpPath: "~/.cache/pi-shell-autocomplete/zcompdump",
+    sourceRcFile: false,
+    maxRespawnsPerMinute: 3,
+  },
   ai: {
     enabled: true,
     modelPath: "models/starcoder2-3b-Q4_K_M.gguf",
@@ -141,7 +207,7 @@ export const defaultConfig: ShellAutocompleteConfig = {
       "models/starcoder2-3b-Q4_K_M.gguf",
       "models/deepseek-coder-1.3b-instruct-Q4_K_M.gguf",
     ],
-    debounceMs: 400,
+    debounceMs: 100,
     maxTokens: 40,
     contextSize: 2048,
     fileContext: {
